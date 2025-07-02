@@ -1,7 +1,7 @@
 from datetime import datetime
 
 from fastapi import FastAPI, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import create_async_engine
 from sqlalchemy import text
 from contextlib import asynccontextmanager
@@ -11,12 +11,13 @@ async_engine = create_async_engine("sqlite+aiosqlite:///db.sqlite3")
 
 app = FastAPI()
 
-#@asynccontextmanager
+#asynccontextmanager
 
 
 class Questionnaire(BaseModel):
-    name : str
-    description: str
+    name : str = Field(serialization_alias="questionnaire_name")
+    description: str = Field(serialization_alias="questionnaire_description")
+    is_active: bool = Field(default=1)
 
 class ResponseAnswer(BaseModel):
     question_id: int
@@ -33,7 +34,7 @@ class Response(BaseModel):
 
 """
 ####################
-#SELECT AUDIT
+#READ QUESTIONNAIRE
 ####################
 """
 
@@ -83,7 +84,7 @@ async def select_questions(questionnaire_id: int):
 
 """
 ####################
-#CREATE AUDIT
+#CREATE SUBMISSION
 ####################
 """
 @app.post('/create_submission/{questionnaire_id}')
@@ -168,8 +169,9 @@ async def view_submission(response_id: int):
 """
 @app.put('/edit_submission/{response_id}')
 async def edit_submission(response: Response, response_id: int):
-    ##RESPONSE BLOCK###
+
     try:
+        ##RESPONSE BLOCK###
         async with async_engine.begin() as conn:
            response_result = await conn.execute(text("SELECT r.team_id, r.completed_date FROM response r left join team t on r.team_id = t.team_id where r.response_id = :response_id"),
                                {"response_id": response_id})
@@ -184,6 +186,7 @@ async def edit_submission(response: Response, response_id: int):
                                         {"response_id": response_id})
            current_ra = ra_result.mappings().all()
 
+          ##CHANE LOGIC
            changes_ra = []
 
            current_ra_dict = {item['question_id']: item for item in current_ra}
@@ -220,6 +223,43 @@ async def edit_submission(response: Response, response_id: int):
         await async_engine.dispose()
         raise HTTPException(status_code=500)
 
+"""
+####################
+#EDIT QUESTIONNAIRE
+####################
+"""
+
+@app.put('/edit_questionnaire/{questionnaire_id}')
+async def edit_questionnaire(questionnaire: Questionnaire, questionnaire_id):
+
+    try:
+        async with async_engine.begin() as conn:
+            result = await conn.execute(text("SELECT questionnaire_id, questionnaire_name, questionnaire_description, is_active FROM questionnaire WHERE questionnaire_id = :questionnaire_id"),
+                               {"questionnaire_id": questionnaire_id})
+            result_mapped = result.mappings().all()
+
+            old_data = result_mapped[0]
+            new_data = questionnaire.model_dump(by_alias=True)
+
+
+            changes = {key: new_value for key, new_value in new_data.items() if key in old_data and old_data[key] != new_value}
+            if changes:
+                changes['questionnaire_id'] = questionnaire_id
+
+                set_clause = [f"{key} = :{key}" for key, value in changes.items()]
+                set_parts = ", ".join(set_clause)
+
+                query = f"UPDATE questionnaire SET {set_parts}, updated_at = datetime('now') WHERE questionnaire_id = :questionnaire_id"
+
+                await conn.execute(text(query), changes)
+                await async_engine.dispose()
+                return "successfully updated"
+            else:
+                return "No changes to update"
+    except:
+        await conn.rollback()
+        await async_engine.dispose()
+        raise HTTPException(status_code=500)
 
 
 
